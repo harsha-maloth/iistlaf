@@ -31,7 +31,9 @@ jobs:
           if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
             echo "Add SUPABASE_URL and SUPABASE_ANON_KEY as repository secrets." && exit 1
           fi
-          printf 'export const SUPABASE_URL = "%s";\nexport const SUPABASE_ANON_KEY = "%s";\n' "$SUPABASE_URL" "$SUPABASE_ANON_KEY" > public/config.js
+          URL_CLEAN=$(printf '%s' "$SUPABASE_URL" | tr -d '[:space:]"')
+          KEY_CLEAN=$(printf '%s' "$SUPABASE_ANON_KEY" | tr -d '[:space:]"')
+          printf 'export const SUPABASE_URL = "%s";\nexport const SUPABASE_ANON_KEY = "%s";\n' "$URL_CLEAN" "$KEY_CLEAN" > public/config.js
 
       - uses: actions/configure-pages@v5
 
