@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Admin | Lost and Found</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>Lost and Found admin</h1>
+  <nav id="nav" hidden>
+    <button data-tab="items">Items</button>
+    <button data-tab="inquiries">Messages</button>
+    <button data-tab="categories">Categories</button>
+    <button id="out">Sign out</button>
+  </nav>
+</header>
+<main>
+  <p id="flash" class="msg err" hidden></p>
+  <form id="login" class="stack">
+    <h2>Sign in</h2>
+    <label>Email <input type="email" name="email" required autocomplete="username"></label>
+    <label>Password <input type="password" name="password" required autocomplete="current-password"></label>
+    <button class="btn" type="submit">Sign in</button>
+  </form>
+  <section id="panel" hidden><div id="view" class="scroll"></div></section>
+</main>
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = d => new Date(d).toLocaleDateString();
+let role = null, tab = 'items';
+const fail = e => { $('#flash').textContent = e.message || e; $('#flash').hidden = false; };
+
+async function enter() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return;
+  const { data } = await sb.from('admins').select('role').eq('user_id', session.user.id).maybeSingle();
+  if (!data) { await sb.auth.signOut(); return fail('This account does not have admin or staff access.'); }
+  role = data.role; $('#login').hidden = true; $('#nav').hidden = false; $('#panel').hidden = false;
+  $('[data-tab=categories]').hidden = role !== 'admin';
+  load();
+}
+document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; load(); });
+$('#out').onclick = async () => { await sb.auth.signOut(); location.reload(); };
+$('#login').onsubmit = async e => {
+  e.preventDefault();
+  const { error } = await sb.auth.signInWithPassword(Object.fromEntries(new FormData(e.target)));
+  if (error) return fail(error); $('#flash').hidden = true; enter();
+};
+
+async function load() {
+  document.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab));
+  $('#flash').hidden = true;
+  const v = $('#view');
+  if (tab === 'items') {
+    const { data, error } = await sb.from('items').select('*, categories(name)').order('created_at', { ascending: false });
+    if (error) return fail(error);
+    v.innerHTML = `<h2>Items</h2><table><tr><th>Item</th><th>Type</th><th>Posted by</th><th>Date</th><th>Status</th><th></th></tr>` +
+      data.map(i => `<tr><td><b>${esc(i.title.replace(/^\[LOST\] /, ''))}</b><br>${esc(i.categories?.name)}<br>${esc(i.description)}</td>
+        <td>${i.title.startsWith('[LOST] ') ? 'Lost' : 'Found'}</td><td>${esc(i.finder_name)}<br>${esc(i.contact)}</td><td>${fmt(i.created_at)}</td>
+        <td><select data-id="${i.id}" class="st">${['Pending','Published','Claimed / Resolved'].map((n, k) => `<option value="${k}"${i.status === k ? ' selected' : ''}>${n}</option>`).join('')}</select></td>
+        <td><button class="btn danger del" data-id="${i.id}" data-img="${esc(i.image_path || '')}">Delete</button></td></tr>`).join('') + '</table>';
+    v.querySelectorAll('.st').forEach(s => s.onchange = async () => {
+      const { error } = await sb.from('items').update({ status: Number(s.value) }).eq('id', s.dataset.id); if (error) fail(error);
+    });
+    v.querySelectorAll('.del').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete this item?')) return;
+      const { error } = await sb.from('items').delete().eq('id', b.dataset.id); if (error) return fail(error);
+      if (b.dataset.img) await sb.storage.from('items').remove([b.dataset.img]);
+      load();
+    });
+  } else if (tab === 'inquiries') {
+    const { data, error } = await sb.from('inquiries').select('*').order('created_at', { ascending: false });
+    if (error) return fail(error);
+    v.innerHTML = `<h2>Messages</h2><table><tr><th>From</th><th>Message</th><th>Date</th><th></th></tr>` +
+      data.map(m => `<tr><td><b>${esc(m.fullname)}</b><br>${esc(m.email)}<br>${esc(m.contact)}</td><td>${esc(m.message)}</td><td>${fmt(m.created_at)}</td>
+        <td><button class="btn alt rd" data-id="${m.id}" data-v="${!m.is_read}">${m.is_read ? 'Mark unread' : 'Mark read'}</button>
+        <button class="btn danger del" data-id="${m.id}">Delete</button></td></tr>`).join('') + '</table>';
+    v.querySelectorAll('.rd').forEach(b => b.onclick = async () => { await sb.from('inquiries').update({ is_read: b.dataset.v === 'true' }).eq('id', b.dataset.id); load(); });
+    v.querySelectorAll('.del').forEach(b => b.onclick = async () => { if (confirm('Delete this message?')) { await sb.from('inquiries').delete().eq('id', b.dataset.id); load(); } });
+  } else {
+    const { data, error } = await sb.from('categories').select('*').order('name');
+    if (error) return fail(error);
+    v.innerHTML = `<h2>Categories</h2><form id="addcat" class="bar"><input name="name" placeholder="New category name" required><button class="btn">Add category</button></form>
+      <table><tr><th>Name</th><th>Active</th><th></th></tr>` + data.map(c => `<tr><td>${esc(c.name)}</td>
+      <td><input type="checkbox" class="act" data-id="${c.id}"${c.active ? ' checked' : ''} aria-label="Active"></td>
+      <td><button class="btn danger del" data-id="${c.id}">Delete</button></td></tr>`).join('') + '</table>';
+    $('#addcat').onsubmit = async e => { e.preventDefault(); const { error } = await sb.from('categories').insert({ name: new FormData(e.target).get('name') }); if (error) return fail(error); load(); };
+    v.querySelectorAll('.act').forEach(c => c.onchange = async () => { await sb.from('categories').update({ active: c.checked }).eq('id', c.dataset.id); });
+    v.querySelectorAll('.del').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete this category?')) return;
+      const { error } = await sb.from('categories').delete().eq('id', b.dataset.id);
+      if (error) return fail('Cannot delete a category that still has items. Deactivate it instead.'); load();
+    });
+  }
+}
+enter();
+</script>
+</body>
+</html>

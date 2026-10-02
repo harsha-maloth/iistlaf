@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lost and Found</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1 id="site-name">Lost and Found</h1>
+  <nav>
+    <button data-tab="items">Found items</button>
+    <button data-tab="lost">Lost items</button>
+    <button data-tab="post">Post a found item</button>
+    <button data-tab="postlost">Post a lost item</button>
+    <button data-tab="contact">Contact us</button>
+  </nav>
+</header>
+<main>
+  <p id="flash" class="msg" hidden></p>
+
+  <section id="items">
+    <h2>Found items waiting for their owners</h2>
+    <div class="bar">
+      <input id="q" type="search" placeholder="Search by title or description" aria-label="Search items">
+      <select id="cat-filter" aria-label="Filter by category"><option value="">All categories</option></select>
+    </div>
+    <div id="grid" class="grid"></div>
+  </section>
+
+  <section id="lost" hidden>
+    <h2>Lost items people are looking for</h2>
+    <div class="bar">
+      <input id="q-lost" type="search" placeholder="Search by title or description" aria-label="Search lost items">
+      <select id="cat-filter-lost" aria-label="Filter by category"><option value="">All categories</option></select>
+    </div>
+    <div id="grid-lost" class="grid"></div>
+  </section>
+
+  <section id="post" hidden>
+    <h2>Post a found item</h2>
+    <p>New posts are reviewed before they appear on the board.</p>
+    <form id="post-form" class="stack">
+      <label>Category <select name="category_id" id="post-cat" required></select></label>
+      <label>Your name <input name="finder_name" required></label>
+      <label>Item title <input name="title" required placeholder="Black wallet near Room 101"></label>
+      <label>Description <textarea name="description" rows="4" required></textarea></label>
+      <label>How owners can reach you <input name="contact" required placeholder="Phone or email"></label>
+      <label>Photo (JPG, PNG or WebP, up to 3 MB) <input type="file" name="image" accept="image/jpeg,image/png,image/webp"></label>
+      <button class="btn" type="submit">Submit for review</button>
+    </form>
+  </section>
+
+  <section id="postlost" hidden>
+    <h2>Post a lost item</h2>
+    <p>New posts are reviewed before they appear on the board.</p>
+    <form id="postlost-form" class="stack">
+      <label>Category <select name="category_id" id="postlost-cat" required></select></label>
+      <label>Your name <input name="finder_name" required></label>
+      <label>Item title <input name="title" required placeholder="Black wallet lost near Room 101"></label>
+      <label>Description <textarea name="description" rows="4" required placeholder="What does it look like? Where and when did you lose it?"></textarea></label>
+      <label>How finders can reach you <input name="contact" required placeholder="Phone or email"></label>
+      <label>Photo (optional, JPG, PNG or WebP, up to 3 MB) <input type="file" name="image" accept="image/jpeg,image/png,image/webp"></label>
+      <button class="btn" type="submit">Submit for review</button>
+    </form>
+  </section>
+
+  <section id="contact" hidden>
+    <h2>Contact us</h2>
+    <p id="contact-info"></p>
+    <form id="contact-form" class="stack">
+      <label>Full name <input name="fullname" required></label>
+      <label>Phone <input name="contact" required></label>
+      <label>Email <input type="email" name="email" required></label>
+      <label>Message <textarea name="message" rows="4" required></textarea></label>
+      <button class="btn" type="submit">Send message</button>
+    </form>
+  </section>
+</main>
+
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let items = [];
+const LOST = '[LOST] ';
+const kindOf = i => i.title.startsWith(LOST) ? 'lost' : 'found';
+const cleanTitle = i => i.title.startsWith(LOST) ? i.title.slice(LOST.length) : i.title;
+
+function flash(text, err) {
+  const el = $('#flash'); el.textContent = text; el.className = 'msg' + (err ? ' err' : ''); el.hidden = false;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function show(tab) {
+  for (const s of ['items','lost','post','postlost','contact']) $('#' + s).hidden = s !== tab;
+  document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab));
+  $('#flash').hidden = true;
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => { location.hash = b.dataset.tab; });
+addEventListener('hashchange', () => show(location.hash.slice(1) || 'items'));
+
+function render() {
+  for (const [kind, grid, qEl, catEl, empty] of [
+    ['found', '#grid', '#q', '#cat-filter', 'No items match. Try another search, or post what you found.'],
+    ['lost', '#grid-lost', '#q-lost', '#cat-filter-lost', 'No lost items match. Try another search, or post what you lost.']]) {
+    const q = $(qEl).value.toLowerCase(), cat = $(catEl).value;
+    const list = items.filter(i => kindOf(i) === kind && (!cat || String(i.category_id) === cat) &&
+      (cleanTitle(i) + ' ' + i.description).toLowerCase().includes(q));
+    $(grid).innerHTML = list.length ? list.map(i => {
+      const img = i.image_path ? `<img loading="lazy" alt="" src="${sb.storage.from('items').getPublicUrl(i.image_path).data.publicUrl}">` : '';
+      return `<article class="tag ${kind}">${img}<h3>${esc(cleanTitle(i))}</h3><p class="cat">${esc(i.categories?.name)}</p>
+        <p>${esc(i.description)}</p><p>${kind === 'lost' ? 'Lost by' : 'Found by'} ${esc(i.finder_name)}<br>Contact: ${esc(i.contact)}</p></article>`;
+    }).join('') : `<p class="empty">${empty}</p>`;
+  }
+}
+
+async function init() {
+  const [{ data: cats }, { data: its }, { data: set }] = await Promise.all([
+    sb.from('categories').select('id,name').order('name'),
+    sb.from('items').select('*, categories(name)').eq('status', 1).order('created_at', { ascending: false }),
+    sb.from('site_settings').select('key,value')
+  ]);
+  items = its || [];
+  const s = Object.fromEntries((set || []).map(r => [r.key, r.value]));
+  if (s.name) { $('#site-name').textContent = s.name; document.title = s.name; }
+  $('#contact-info').textContent = [s.address, s.phone, s.email].filter(Boolean).join('  |  ');
+  const opts = (cats || []).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  $('#cat-filter').insertAdjacentHTML('beforeend', opts);
+  $('#cat-filter-lost').insertAdjacentHTML('beforeend', opts);
+  $('#post-cat').innerHTML = opts;
+  $('#postlost-cat').innerHTML = opts;
+  render(); show(location.hash.slice(1) || 'items');
+}
+for (const id of ['#q', '#q-lost']) $(id).oninput = render;
+for (const id of ['#cat-filter', '#cat-filter-lost']) $(id).onchange = render;
+
+async function submitPost(e, backTo, kind) {
+  e.preventDefault();
+  const f = new FormData(e.target), file = f.get('image'), row = Object.fromEntries(f); delete row.image;
+  row.category_id = Number(row.category_id); row.status = 0;
+  if (kind === 'lost') row.title = LOST + row.title;
+  if (file && file.size) {
+    if (file.size > 3145728) return flash('That photo is over 3 MB. Choose a smaller one.', true);
+    const path = crypto.randomUUID() + '.' + file.name.split('.').pop().toLowerCase();
+    const up = await sb.storage.from('items').upload(path, file);
+    if (up.error) return flash('Photo upload failed: ' + up.error.message, true);
+    row.image_path = path;
+  }
+  const { error } = await sb.from('items').insert(row);
+  if (error) return flash('Could not submit: ' + error.message, true);
+  e.target.reset(); location.hash = backTo; flash('Submitted. Your post will appear once it is approved.');
+}
+$('#post-form').onsubmit = e => submitPost(e, 'items', 'found');
+$('#postlost-form').onsubmit = e => submitPost(e, 'lost', 'lost');
+$('#contact-form').onsubmit = async e => {
+  e.preventDefault();
+  const { error } = await sb.from('inquiries').insert(Object.fromEntries(new FormData(e.target)));
+  if (error) return flash('Could not send: ' + error.message, true);
+  e.target.reset(); flash('Message sent. We will get back to you.');
+};
+init();
+</script>
+</body>
+</html>
